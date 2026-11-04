@@ -1,0 +1,107 @@
+# QuotaRibbon — Herdr plugin manifest.
+# min_herdr_version: verified on 0.9.5 only; re-verify before lowering it.
+id = "fluzzy.herdr-quotaribbon"
+name = "QuotaRibbon"
+version = "0.1.0"
+description = "Claude Code and Codex subscription limits in your Herdr tab bar."
+platforms = ["macos"]
+min_herdr_version = "0.9.5"
+
+# Runs once per Herdr server start: rotates the server epoch and exits (no daemon).
+[[startup]]
+command = ["/bin/sh", "bin/quotaribbon", "startup"]
+
+[[actions]]
+id = "claude-on"
+title = "QuotaRibbon: Show Claude limits"
+description = "Show Claude Code subscription limits in the tab bar (once Claude is verified as connected)."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "claude-on"]
+
+[[actions]]
+id = "claude-off"
+title = "QuotaRibbon: Hide Claude limits"
+description = "Hide Claude Code limits from the tab bar and stop new Claude usage requests."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "claude-off"]
+
+[[actions]]
+id = "codex-on"
+title = "QuotaRibbon: Show Codex limits"
+description = "Show Codex subscription limits in the tab bar (once Codex is verified as connected)."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "codex-on"]
+
+[[actions]]
+id = "codex-off"
+title = "QuotaRibbon: Hide Codex limits"
+description = "Hide Codex limits from the tab bar and stop new Codex usage requests."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "codex-off"]
+
+[[actions]]
+id = "refresh"
+title = "QuotaRibbon: Refresh limits"
+description = "Refresh subscription limits now, respecting the normal interval, backoff and server retry limits."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "refresh"]
+
+[[actions]]
+id = "interval"
+title = "QuotaRibbon: Set refresh interval"
+description = "Choose how often limits are refreshed (1, 2, 5 or 10 minutes); stale/hide times follow."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "interval"]
+
+[[actions]]
+id = "diagnostics"
+title = "QuotaRibbon: Diagnostics"
+description = "Show a secret-free report of connection, authentication category, data and tab-bar state."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "diagnostics"]
+
+[[actions]]
+id = "setup"
+title = "QuotaRibbon: Set up tab bar"
+description = "Preview and, after approval, add the QuotaRibbon entry to the Herdr tab bar config."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "setup"]
+
+[[actions]]
+id = "detach"
+title = "QuotaRibbon: Remove from tab bar"
+description = "Preview and, after approval, remove only the tab-bar entry QuotaRibbon added."
+contexts = ["global"]
+command = ["/bin/sh", "bin/quotaribbon", "detach"]
+
+[[panes]]
+id = "setup-ui"
+title = "QuotaRibbon Setup"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["/bin/sh", "bin/quotaribbon", "setup-ui"]
+
+[[panes]]
+id = "diagnostics-ui"
+title = "QuotaRibbon Diagnostics"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["/bin/sh", "bin/quotaribbon", "diagnostics-ui"]
+
+[[panes]]
+id = "detach-ui"
+title = "QuotaRibbon Detach"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["/bin/sh", "bin/quotaribbon", "detach-ui"]
+
+[[panes]]
+id = "interval-ui"
+title = "QuotaRibbon Refresh Interval"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["/bin/sh", "bin/quotaribbon", "interval-ui"]

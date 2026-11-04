@@ -1,0 +1,639 @@
+#!/bin/sh
+# QuotaRibbon launcher for every herdr-plugin.toml command: bin/quotaribbon <subcommand> [args...]
+#
+# Exported bash functions (BASH_FUNC_*) could shadow builtins: under bash, re-exec once
+# with -p first. Until then only `case` and the special builtin `exec` run.
+case ${BASH_VERSION:-} in
+    ?*)
+        case $- in
+            *p*) ;;
+            *) exec /bin/sh -p -- "$0" "$@" ;;
+        esac
+        ;;
+esac
+
+# Fail closed: no Python candidate runs, not even for the version probe, until it passes
+# the trust walk (qr_trusted_walk): every component and symlink hop is owned by us or
+# root, not writable by others (sticky dirs and single-user groups excepted), with no
+# foreign-write ACL on macOS; a "#!" interpreter must pass the same rules.
+# Python: $QUOTARIBBON_PYTHON, else the one pinned in bootstrap.json, else python3.x from
+# trusted PATH entries. PATH is reduced to trusted dirs (the original is passed on as
+# QUOTARIBBON_HOST_PATH), only fixed absolute system tools run, and Python runs with -I.
+set -u
+set -f
+
+die() {
+    printf 'quotaribbon: %s\n' "$1" >&2
+    exit 1
+}
+
+case $0 in
+    */*) qr_self_dir=${0%/*} ;;
+    *) qr_self_dir=. ;;
+esac
+ROOT=$(CDPATH='' cd -P -- "$qr_self_dir/.." 2>/dev/null && pwd -P) || die "cannot resolve plugin root"
+[ -f "$ROOT/bootstrap/action.py" ] || die "bootstrap/action.py not found under plugin root"
+
+qr_nl='
+'
+qr_cr=$(printf '\r')
+qr_soh=$(printf '\001')
+qr_max_hops=40
+qr_max_scripts=4
+
+qr_ls=/bin/ls
+[ -x "$qr_ls" ] || die "$qr_ls is required"
+qr_readlink=
+for qr_u in /usr/bin/readlink /bin/readlink; do
+    if [ -x "$qr_u" ]; then
+        qr_readlink=$qr_u
+        break
+    fi
+done
+# Without id(1) only root-owned paths can be trusted.
+qr_uid=
+qr_user=
+for qr_u in /usr/bin/id /bin/id; do
+    if [ -x "$qr_u" ]; then
+        qr_uid=$("$qr_u" -u 2>/dev/null) || qr_uid=
+        qr_user=$("$qr_u" -un 2>/dev/null) || qr_user=
+        break
+    fi
+done
+case $qr_uid in *[!0-9]*) qr_uid= ;; esac
+# For reading "#!" lines; without them no script is trusted.
+qr_dd=
+for qr_u in /bin/dd /usr/bin/dd; do
+    if [ -x "$qr_u" ]; then
+        qr_dd=$qr_u
+        break
+    fi
+done
+qr_tr=
+for qr_u in /usr/bin/tr /bin/tr; do
+    if [ -x "$qr_u" ]; then
+        qr_tr=$qr_u
+        break
+    fi
+done
+
+# ACL entries are judged only on macOS, whose ls(1) lists them with -e (-q turns a
+# newline in a name into "?", so no name can forge an ACL line).
+qr_darwin=
+for qr_u in /usr/bin/uname /bin/uname; do
+    if [ -x "$qr_u" ]; then
+        [ "$("$qr_u" -s 2>/dev/null)" = Darwin ] && qr_darwin=1
+        break
+    fi
+done
+if [ -n "$qr_darwin" ]; then
+    qr_ls_opts=-ldneq
+else
+    qr_ls_opts=-ldn
+fi
+
+# Sets qr_mode, qr_owner and qr_gid from `ls -ldn $1` (a final symlink is not followed)
+# and, on macOS, qr_has_acl when the entry carries an ACL.
+qr_lstat() {
+    qr_line=$("$qr_ls" "$qr_ls_opts" -- "$1" 2>/dev/null) || return 1
+    qr_has_acl=
+    if [ -n "$qr_darwin" ]; then
+        case $qr_line in *"$qr_nl"*) qr_has_acl=1 ;; esac
+    fi
+    qr_line=${qr_line%%"$qr_nl"*}
+    set -- $qr_line
+    [ $# -ge 4 ] || return 1
+    qr_mode=$1
+    qr_owner=$3
+    qr_gid=$4
+    case $qr_owner in '' | *[!0-9]*) return 1 ;; esac
+    case $qr_gid in '' | *[!0-9]*) return 1 ;; esac
+    case $qr_mode in
+        ??????????+*)
+            [ -n "$qr_darwin" ] && qr_has_acl=1
+            return 0
+            ;;
+        ??????????*) return 0 ;;
+    esac
+    return 1
+}
+
+# 0 when the ACL line $1 (` N: PRINCIPAL [inherited] allow|deny PERM,...`) grants
+# nobody but root or the current user anything beyond reading and traversal.
+qr_acl_entry_ok() {
+    qr_e=$1
+    while :; do
+        case $qr_e in
+            ' '*) qr_e=${qr_e# } ;;
+            *) break ;;
+        esac
+    done
+    case $qr_e in [0-9]*': '*) ;; *) return 1 ;; esac
+    qr_e_idx=${qr_e%%': '*}
+    case $qr_e_idx in '' | *[!0-9]*) return 1 ;; esac
+    qr_e=${qr_e#*': '}
+    set -- $qr_e
+    [ $# -ge 3 ] || return 1
+    qr_e_who=$1
+    shift
+    [ "$1" = inherited ] && shift
+    [ $# -eq 2 ] || return 1
+    case $1 in
+        deny) return 0 ;;
+        allow) ;;
+        *) return 1 ;;
+    esac
+    [ "$qr_e_who" = user:root ] && return 0
+    [ -n "$qr_user" ] && [ "$qr_e_who" = "user:$qr_user" ] && return 0
+    qr_e_perms=$2,
+    while [ -n "$qr_e_perms" ]; do
+        qr_e_p=${qr_e_perms%%,*}
+        qr_e_perms=${qr_e_perms#*,}
+        case $qr_e_p in
+            read | list | execute | search | readattr | readextattr | readsecurity) ;;
+            file_inherit | directory_inherit | limit_inherit | only_inherit) ;;
+            *) return 1 ;;
+        esac
+    done
+    return 0
+}
+
+# 0 when the entry $1 just read by qr_lstat has no ACL entry that lets another account
+# modify it (see the header). The ACL is re-read by name only when one is present.
+qr_acl_ok() {
+    [ -n "$qr_has_acl" ] || return 0
+    qr_acl_out=$("$qr_ls" -ldeq -- "$1" 2>/dev/null) || return 1
+    qr_acl_first=1
+    qr_acl_n=0
+    while IFS= read -r qr_al; do
+        if [ -n "$qr_acl_first" ]; then
+            qr_acl_first=
+            continue
+        fi
+        qr_acl_entry_ok "$qr_al" || return 1
+        qr_acl_n=$((qr_acl_n + 1))
+    done <<EOF
+$qr_acl_out
+EOF
+    [ "$qr_acl_n" -gt 0 ]
+}
+
+qr_owner_ok() {
+    [ "$qr_owner" = 0 ] && return 0
+    [ -n "$qr_uid" ] && [ "$qr_owner" = "$qr_uid" ]
+}
+
+qr_member_ok() {
+    [ "$1" = root ] && return 0
+    [ -n "$qr_user" ] && [ "$1" = "$qr_user" ]
+}
+
+# 0 when every account in group $1 (listed members and accounts whose primary group it
+# is) is the current user or root. Unknown groups, groups without any listed member
+# (on macOS those implicitly contain every account) and missing tools fail closed.
+qr_group_members_ok() {
+    [ -n "$qr_user" ] || return 1
+    qr_any=
+    if [ -x /usr/bin/dscacheutil ] && [ -x /usr/bin/dscl ]; then
+        qr_out=$(/usr/bin/dscacheutil -q group -a gid "$1" 2>/dev/null) || return 1
+        qr_seen=
+        while IFS= read -r qr_gl; do
+            case $qr_gl in
+                'gid: '*)
+                    qr_g=${qr_gl#gid: }
+                    qr_g=${qr_g%% *}
+                    [ "$qr_g" = "$1" ] && qr_seen=1
+                    ;;
+                'users:'*)
+                    for qr_m in ${qr_gl#users:}; do
+                        qr_member_ok "$qr_m" || return 1
+                        qr_any=1
+                    done
+                    ;;
+            esac
+        done <<EOF
+$qr_out
+EOF
+        [ -n "$qr_seen" ] || return 1
+        qr_out=$(/usr/bin/dscl . -list /Users PrimaryGroupID 2>/dev/null) || return 1
+        while read -r qr_m qr_g; do
+            if [ "$qr_g" = "$1" ]; then
+                qr_member_ok "$qr_m" || return 1
+                qr_any=1
+            fi
+        done <<EOF
+$qr_out
+EOF
+        [ -n "$qr_any" ]
+        return
+    fi
+    qr_getent=
+    for qr_u in /usr/bin/getent /bin/getent; do
+        if [ -x "$qr_u" ]; then
+            qr_getent=$qr_u
+            break
+        fi
+    done
+    [ -n "$qr_getent" ] || return 1
+    qr_out=$("$qr_getent" group "$1" 2>/dev/null) || return 1
+    qr_out=${qr_out%%"$qr_nl"*}
+    IFS=: read -r qr_x qr_x qr_g qr_rest <<EOF
+$qr_out
+EOF
+    [ "$qr_g" = "$1" ] || return 1
+    while [ -n "$qr_rest" ]; do
+        case $qr_rest in
+            *,*) qr_m=${qr_rest%%,*}; qr_rest=${qr_rest#*,} ;;
+            *) qr_m=$qr_rest; qr_rest= ;;
+        esac
+        [ -n "$qr_m" ] || continue
+        qr_member_ok "$qr_m" || return 1
+        qr_any=1
+    done
+    qr_out=$("$qr_getent" passwd 2>/dev/null) || return 1
+    while IFS=: read -r qr_m qr_x qr_x qr_g qr_x; do
+        if [ "$qr_g" = "$1" ]; then
+            qr_member_ok "$qr_m" || return 1
+            qr_any=1
+        fi
+    done <<EOF
+$qr_out
+EOF
+    [ -n "$qr_any" ]
+}
+
+qr_gp_ok=' '
+qr_gp_bad=' '
+qr_group_private() {
+    case $qr_gp_ok in *" $1 "*) return 0 ;; esac
+    case $qr_gp_bad in *" $1 "*) return 1 ;; esac
+    if qr_group_members_ok "$1"; then
+        qr_gp_ok="$qr_gp_ok$1 "
+        return 0
+    fi
+    qr_gp_bad="$qr_gp_bad$1 "
+    return 1
+}
+
+# 0 when the entry described by qr_mode/qr_gid cannot be written by other accounts.
+# $1 is "dir" for a directory (the sticky bit then makes shared write harmless).
+qr_write_ok() {
+    if [ "$1" = dir ]; then
+        case $qr_mode in ?????????[tT]*) return 0 ;; esac
+    fi
+    case $qr_mode in ????????w*) return 1 ;; esac
+    case $qr_mode in
+        ?????w*) qr_group_private "$qr_gid" && return 0; return 1 ;;
+    esac
+    return 0
+}
+
+# Directories already walked, newline-delimited (a path with a newline is never trusted).
+qr_dirs_ok=$qr_nl
+qr_root_ok=
+
+# 0 when $1 is a trusted path; $2 is "file", "exec" or "dir". Never executes anything.
+qr_trusted_walk() {
+    case $1 in /*) ;; *) return 1 ;; esac
+    case $1 in *"$qr_nl"*) return 1 ;; esac
+    if [ "$2" != dir ]; then
+        case $1 in */) return 1 ;; esac
+    fi
+    if [ -z "$qr_root_ok" ]; then
+        qr_lstat / && qr_owner_ok && qr_write_ok dir && qr_acl_ok / || return 1
+        qr_root_ok=1
+    fi
+    qr_cur=
+    qr_todo=$1
+    qr_hops=0
+    while :; do
+        while :; do
+            case $qr_todo in
+                /*) qr_todo=${qr_todo#/} ;;
+                *) break ;;
+            esac
+        done
+        if [ -z "$qr_todo" ]; then
+            # The path ends at qr_cur, a directory checked on the way.
+            [ "$2" = dir ]
+            return
+        fi
+        case $qr_todo in
+            */*) qr_name=${qr_todo%%/*}; qr_todo=${qr_todo#*/}; qr_more=1 ;;
+            *) qr_name=$qr_todo; qr_todo=; qr_more= ;;
+        esac
+        case $qr_name in
+            .) continue ;;
+            ..) qr_cur=${qr_cur%/*}; continue ;; # qr_cur is resolved and already checked
+        esac
+        # qr_cur is a checked directory, so nobody else can swap this entry.
+        qr_next=$qr_cur/$qr_name
+        case $qr_dirs_ok in
+            *"$qr_nl$qr_next$qr_nl"*)
+                qr_cur=$qr_next
+                continue
+                ;;
+        esac
+        qr_lstat "$qr_next" && qr_owner_ok && qr_acl_ok "$qr_next" || return 1
+        case $qr_mode in
+            l*)
+                qr_hops=$((qr_hops + 1))
+                [ "$qr_hops" -le "$qr_max_hops" ] || return 1
+                [ -n "$qr_readlink" ] || return 1
+                # The trailing "x" keeps newlines at the end of the target intact.
+                qr_tgt=$("$qr_readlink" "$qr_next" 2>/dev/null && printf x) || return 1
+                qr_tgt=${qr_tgt%x}
+                qr_tgt=${qr_tgt%"$qr_nl"}
+                [ -n "$qr_tgt" ] || return 1
+                case $qr_tgt in *"$qr_nl"*) return 1 ;; esac
+                case $qr_tgt in /*) qr_cur= ;; esac
+                if [ -n "$qr_more" ]; then
+                    qr_todo=$qr_tgt/$qr_todo
+                else
+                    qr_todo=$qr_tgt
+                fi
+                ;;
+            d*)
+                qr_write_ok dir || return 1
+                qr_dirs_ok=$qr_dirs_ok$qr_next$qr_nl
+                qr_cur=$qr_next
+                ;;
+            -*)
+                [ -z "$qr_more" ] || return 1 # a file in the middle of the path
+                qr_write_ok file || return 1
+                case $2 in
+                    exec) [ -f "$qr_next" ] && [ -x "$qr_next" ] || return 1 ;;
+                    file) ;;
+                    *) return 1 ;; # a file where a directory was required
+                esac
+                return 0
+                ;;
+            *) return 1 ;;
+        esac
+    done
+}
+
+# 0 when what the kernel runs for the walked file $1 is trusted too; $2 is how many
+# scripts the chain may still hold. Recursive: state kept across calls lives in "$@".
+qr_shebang_ok() {
+    [ -r "$1" ] || return 1
+    [ -n "$qr_dd" ] && [ -n "$qr_tr" ] || return 1
+    # The braces silence shells that warn about a NUL byte in the substitution.
+    { qr_sb=$("$qr_dd" if="$1" bs=2 count=1 2>/dev/null); } 2>/dev/null || return 1
+    [ "$qr_sb" = '#!' ] || return 0 # not a script: the kernel runs the file itself
+    [ "$2" -gt 0 ] || return 1
+    qr_sb_left=$(($2 - 1))
+    # NUL bytes become \001 so that they cannot vanish from the line unnoticed.
+    qr_sb=$("$qr_dd" if="$1" bs=256 count=1 2>/dev/null | "$qr_tr" '\000' '\001'; printf x)
+    case $qr_sb in '#!'*"$qr_nl"*) ;; *) return 1 ;; esac
+    qr_sb=${qr_sb%%"$qr_nl"*}
+    qr_r=${qr_sb#??}
+    case $qr_r in *"$qr_soh"*) return 1 ;; esac
+    qr_strip_ws
+    qr_sb_int=${qr_r%%[ 	]*}
+    qr_r=${qr_r#"$qr_sb_int"}
+    qr_strip_ws
+    if [ -n "$qr_darwin" ]; then
+        qr_sb_name=${qr_r%%[ 	]*} # macOS passes each word as its own argument
+    else
+        qr_strip_trailing_ws
+        qr_sb_name=$qr_r # Linux passes the rest of the line as one argument
+    fi
+    case $qr_sb_int in /*) ;; *) return 1 ;; esac
+    case $qr_sb_int in *"$qr_cr"*) return 1 ;; esac
+    qr_trusted_walk "$qr_sb_int" exec || return 1
+    qr_sb_env=
+    case /$qr_sb_int in */env) qr_sb_env=1 ;; esac
+    case /$qr_next in */env) qr_sb_env=1 ;; esac # the file the walk arrived at
+    if [ -z "$qr_sb_env" ]; then
+        qr_shebang_ok "$qr_sb_int" "$qr_sb_left"
+        return
+    fi
+    case $qr_sb_name in '' | -* | *=* | */* | *"$qr_cr"*) return 1 ;; esac
+    # env(1) runs the first regular executable NAME in PATH, which is qr_child_path.
+    qr_sb_cmd=
+    qr_sb_rest=$qr_child_path
+    while [ -n "$qr_sb_rest" ]; do
+        case $qr_sb_rest in
+            *:*) qr_sb_dir=${qr_sb_rest%%:*}; qr_sb_rest=${qr_sb_rest#*:} ;;
+            *) qr_sb_dir=$qr_sb_rest; qr_sb_rest= ;;
+        esac
+        if [ -f "$qr_sb_dir/$qr_sb_name" ] && [ -x "$qr_sb_dir/$qr_sb_name" ]; then
+            qr_sb_cmd=$qr_sb_dir/$qr_sb_name
+            break
+        fi
+    done
+    [ -n "$qr_sb_cmd" ] || return 1
+    qr_trusted_walk "$qr_sb_cmd" exec || return 1
+    set -- "$qr_sb_int" "$qr_sb_left" "$qr_sb_cmd"
+    qr_shebang_ok "$1" "$2" || return 1
+    qr_shebang_ok "$3" "$2"
+}
+
+# 0 when $1 is a trusted Python >= 3.11; it runs (version probe) only after the trust check.
+qr_python_ok() {
+    qr_trusted_walk "$1" exec || return 1
+    qr_shebang_ok "$1" "$qr_max_scripts" || return 1
+    "$1" -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+        </dev/null >/dev/null 2>&1
+}
+
+qr_strip_ws() {
+    while :; do
+        case $qr_r in
+            ' '* | '	'*) qr_r=${qr_r#?} ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+qr_strip_trailing_ws() {
+    while :; do
+        case $qr_r in
+            *' ' | *'	') qr_r=${qr_r%?} ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+# Prints the "python" path from a trusted bootstrap.json; escaped values are skipped, not decoded.
+qr_bootstrap_python() {
+    qr_cfg=${HERDR_PLUGIN_CONFIG_DIR:-}
+    case $qr_cfg in /*) ;; *) return 1 ;; esac
+    qr_file=$qr_cfg/bootstrap.json
+    qr_trusted_walk "$qr_file" file || return 1
+    qr_val=
+    while IFS= read -r qr_l || [ -n "$qr_l" ]; do
+        case $qr_l in *'"python"'*) ;; *) continue ;; esac
+        qr_r=${qr_l#*'"python"'}
+        qr_strip_ws
+        case $qr_r in :*) qr_r=${qr_r#:} ;; *) continue ;; esac
+        qr_strip_ws
+        case $qr_r in '"'*) qr_r=${qr_r#'"'} ;; *) continue ;; esac
+        case $qr_r in *'"'*) qr_v=${qr_r%%'"'*} ;; *) continue ;; esac
+        case $qr_v in '' | *'\'*) continue ;; esac
+        qr_val=$qr_v
+        break
+    done <"$qr_file"
+    case $qr_val in /*) ;; *) return 1 ;; esac
+    printf '%s\n' "$qr_val"
+}
+
+# Appends $1 to qr_fp_out when it is an absolute trusted directory not yet listed.
+qr_fp_add() {
+    case $1 in /*) ;; *) return 0 ;; esac
+    case :$qr_fp_out: in *":$1:"*) return 0 ;; esac
+    qr_trusted_walk "$1" dir || return 0
+    qr_fp_out=${qr_fp_out:+$qr_fp_out:}$1
+}
+
+# Sets qr_dir to the absolute directory $1 without trailing slashes ("/" stays "/").
+qr_strip_slashes() {
+    qr_dir=$1
+    while :; do
+        case $qr_dir in
+            ?*/) qr_dir=${qr_dir%/} ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+# Prints the symlink-free spelling of directory $1 (nothing when it cannot be entered).
+qr_realdir() {
+    (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P) 2>/dev/null
+}
+
+# Appends $1, as spelled and as resolved, to the newline-delimited qr_list.
+qr_list_add() {
+    case $1 in /*) ;; *) return 0 ;; esac
+    case $1 in *"$qr_nl"*) return 0 ;; esac
+    qr_strip_slashes "$1"
+    qr_list=$qr_list$qr_dir$qr_nl
+    qr_dir=$(qr_realdir "$1")
+    [ -n "$qr_dir" ] && qr_list=$qr_list$qr_dir$qr_nl
+    return 0
+}
+
+# A cloned repository is ours but written by others: no PATH entry in or below the
+# cwd, $PWD or $HERDR_ACTIVE_PANE_CWD is searched.
+qr_find_untrusted() {
+    qr_list=$qr_nl
+    qr_list_add "${HOME:-}"
+    qr_home=$qr_list
+    qr_list=$qr_nl
+    qr_list_add "$(pwd -P 2>/dev/null)"
+    qr_list_add "${PWD:-}"
+    qr_list_add "${HERDR_ACTIVE_PANE_CWD:-}"
+    qr_untrusted=$qr_list
+}
+
+# 0 when $1 is or is below an untrusted dir ("below" skipped for / and $HOME, as in Python).
+qr_in_untrusted() {
+    qr_iu_rest=${qr_untrusted#"$qr_nl"}
+    while [ -n "$qr_iu_rest" ]; do
+        qr_ud=${qr_iu_rest%%"$qr_nl"*}
+        qr_iu_rest=${qr_iu_rest#*"$qr_nl"}
+        [ "$1" = "$qr_ud" ] && return 0
+        [ "$qr_ud" = / ] && continue
+        case $qr_home in *"$qr_nl$qr_ud$qr_nl"*) continue ;; esac
+        case $1 in "$qr_ud"/*) return 0 ;; esac
+    done
+    return 1
+}
+
+# 0 when the PATH entry $1 lies in or below an untrusted directory, as spelled or resolved.
+qr_entry_untrusted() {
+    qr_strip_slashes "$1"
+    qr_in_untrusted "$qr_dir" && return 0
+    qr_dir=$(qr_realdir "$1")
+    [ -n "$qr_dir" ] && qr_in_untrusted "$qr_dir" && return 0
+    return 1
+}
+
+# qr_safe_path: trusted $PATH entries (searched for Python). qr_child_path: the action's
+# PATH, falling back to trusted /usr/bin:/bin, never empty (that would mean the cwd).
+qr_filter_path() {
+    qr_find_untrusted
+    qr_fp_out=
+    qr_fp_rest=$qr_host_path
+    while [ -n "$qr_fp_rest" ]; do
+        case $qr_fp_rest in
+            *:*) qr_fp_dir=${qr_fp_rest%%:*}; qr_fp_rest=${qr_fp_rest#*:} ;;
+            *) qr_fp_dir=$qr_fp_rest; qr_fp_rest= ;;
+        esac
+        case $qr_fp_dir in /*) ;; *) continue ;; esac
+        case $qr_fp_dir in *"$qr_nl"*) continue ;; esac
+        case :$qr_fp_out: in *":$qr_fp_dir:"*) continue ;; esac
+        qr_entry_untrusted "$qr_fp_dir" && continue
+        qr_fp_add "$qr_fp_dir"
+    done
+    qr_safe_path=$qr_fp_out
+    if [ -z "$qr_fp_out" ]; then
+        qr_fp_add /usr/bin
+        qr_fp_add /bin
+    fi
+    qr_child_path=$qr_fp_out
+}
+
+# PATH for the pinned interpreter: trusted /usr/bin and /bin only (nothing else is walked).
+qr_system_path() {
+    qr_fp_out=
+    qr_fp_add /usr/bin
+    qr_fp_add /bin
+    qr_safe_path=$qr_fp_out
+    qr_child_path=$qr_fp_out
+}
+
+# Called before any candidate runs, so a probed script finds nothing untrusted either.
+qr_export_path() {
+    [ -n "$qr_child_path" ] || die "no trusted directory is available for PATH"
+    PATH=$qr_child_path
+    export PATH
+}
+
+# First suitable interpreter in qr_safe_path. sh has only globals: helpers must not use qr_py_*.
+qr_path_python() {
+    for qr_py_name in python3.13 python3.12 python3.11 python3; do
+        qr_py_rest=$qr_safe_path
+        while [ -n "$qr_py_rest" ]; do
+            case $qr_py_rest in
+                *:*) qr_py_dir=${qr_py_rest%%:*}; qr_py_rest=${qr_py_rest#*:} ;;
+                *) qr_py_dir=$qr_py_rest; qr_py_rest= ;;
+            esac
+            qr_py_cand=$qr_py_dir/$qr_py_name
+            [ -f "$qr_py_cand" ] && [ -x "$qr_py_cand" ] || continue
+            if qr_python_ok "$qr_py_cand"; then
+                printf '%s\n' "$qr_py_cand"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+qr_host_path=${PATH:-}
+QUOTARIBBON_HOST_PATH=$qr_host_path
+export QUOTARIBBON_HOST_PATH
+
+PY=
+if [ -n "${QUOTARIBBON_PYTHON:-}" ]; then
+    qr_filter_path
+    qr_export_path
+    qr_python_ok "$QUOTARIBBON_PYTHON" \
+        || die "QUOTARIBBON_PYTHON must be an absolute path to Python 3.11 or newer that only you or root can modify"
+    PY=$QUOTARIBBON_PYTHON
+fi
+if [ -z "$PY" ] && qr_cand=$(qr_bootstrap_python); then
+    qr_system_path
+    qr_export_path
+    if qr_python_ok "$qr_cand"; then
+        PY=$qr_cand
+    fi
+fi
+if [ -z "$PY" ]; then
+    qr_filter_path
+    qr_export_path
+    PY=$(qr_path_python) || die "Python 3.11 or newer was not found (set QUOTARIBBON_PYTHON)"
+fi
+
+exec "$PY" -I "$ROOT/bootstrap/action.py" "$@"

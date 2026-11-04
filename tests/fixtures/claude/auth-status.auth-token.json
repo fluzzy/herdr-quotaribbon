@@ -1,0 +1,8 @@
+{
+ "loggedIn": true,
+ "authMethod": "oauth_token",
+ "apiProvider": "firstParty",
+ "analyticsDisabled": false,
+ "projectsDirectory": "/tmp/qr-fixture/claudeapi/projects",
+ "configDirectory": "/tmp/qr-fixture/claudeapi"
+}

@@ -1,0 +1,9 @@
+{
+ "loggedIn": true,
+ "authMethod": "api_key",
+ "apiProvider": "firstParty",
+ "analyticsDisabled": false,
+ "projectsDirectory": "/tmp/qr-fixture/claudeapi/projects",
+ "configDirectory": "/tmp/qr-fixture/claudeapi",
+ "apiKeySource": "ANTHROPIC_API_KEY"
+}

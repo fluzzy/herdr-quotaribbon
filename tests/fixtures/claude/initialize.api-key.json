@@ -1,0 +1,16 @@
+{
+ "type": "control_response",
+ "response": {
+  "subtype": "success",
+  "request_id": "quotaribbon-init-1",
+  "response": {
+   "account": {
+    "tokenSource": "none",
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "apiProvider": "firstParty"
+   },
+   "claude_code_version": "2.1.316",
+   "hooks_applied": null
+  }
+ }
+}

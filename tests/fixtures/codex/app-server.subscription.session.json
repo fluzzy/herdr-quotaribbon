@@ -1,0 +1,196 @@
+[
+ {
+  "dir": "send",
+  "msg": {
+   "id": 1,
+   "method": "initialize",
+   "params": {
+    "clientInfo": {
+     "name": "quotaribbon",
+     "title": "QuotaRibbon",
+     "version": "0.1.0"
+    },
+    "capabilities": {
+     "experimentalApi": false,
+     "requestAttestation": false
+    }
+   }
+  }
+ },
+ {
+  "dir": "recv",
+  "msg": {
+   "id": 1,
+   "result": {
+    "userAgent": "quotaribbon/0.166.0 (ExampleOS 1.0; example-arch) (quotaribbon; 0.1.0)",
+    "codexHome": "{HOME}/.codex",
+    "platformFamily": "unix",
+    "platformOs": "macos"
+   }
+  }
+ },
+ {
+  "dir": "send",
+  "msg": {
+   "method": "initialized"
+  }
+ },
+ {
+  "dir": "send",
+  "msg": {
+   "id": 2,
+   "method": "account/read",
+   "params": {
+    "refreshToken": false
+   }
+  }
+ },
+ {
+  "dir": "recv",
+  "msg": {
+   "method": "remoteControl/status/changed",
+   "params": {
+    "status": "disabled",
+    "serverName": "host.invalid",
+    "installationId": "00000000-REDACTED",
+    "environmentId": null
+   },
+   "emittedAtMs": 1767225600000
+  }
+ },
+ {
+  "dir": "recv",
+  "msg": {
+   "method": "account/updated",
+   "params": {
+    "authMode": "chatgpt",
+    "planType": "plus"
+   },
+   "emittedAtMs": 1767225600100
+  }
+ },
+ {
+  "dir": "recv",
+  "msg": {
+   "id": 2,
+   "result": {
+    "account": {
+     "type": "chatgpt",
+     "email": "user@example.invalid",
+     "planType": "plus",
+     "workspaceName": null
+    },
+    "requiresOpenaiAuth": true,
+    "workspaceRouting": {
+     "chatgptAccountId": "acct-REDACTED",
+     "backendOrigin": "https://chatgpt.invalid",
+     "accountRoutingOverride": "NO_CONSTRAINT"
+    }
+   }
+  }
+ },
+ {
+  "dir": "send",
+  "msg": {
+   "id": 3,
+   "method": "account/rateLimits/read"
+  }
+ },
+ {
+  "dir": "recv",
+  "msg": {
+   "id": 3,
+   "result": {
+    "ordinaryUsageAllowed": true,
+    "rateLimits": {
+     "limitId": "codex",
+     "limitName": null,
+     "normalModelSlug": null,
+     "primary": {
+      "usedPercent": 40,
+      "windowDurationMins": 10080,
+      "resetsAt": 1767830400
+     },
+     "secondary": null,
+     "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": "0E-10"
+     },
+     "individualLimit": null,
+     "spendControlReached": false,
+     "planType": "plus",
+     "rateLimitReachedType": null
+    },
+    "rateLimitsByLimitId": {
+     "codex": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+       "usedPercent": 40,
+       "windowDurationMins": 10080,
+       "resetsAt": 1767830400
+      },
+      "secondary": null,
+      "credits": {
+       "hasCredits": false,
+       "unlimited": false,
+       "balance": "0E-10"
+      },
+      "individualLimit": null,
+      "spendControlReached": false,
+      "planType": "plus",
+      "rateLimitReachedType": null
+     }
+    },
+    "rateLimitResetCredits": {
+     "availableCount": 1,
+     "credits": [
+      {
+       "id": "RateLimitResetCredit_REDACTED",
+       "resetType": "codexRateLimits",
+       "status": "available",
+       "grantedAt": 1767225600,
+       "expiresAt": 1769817600,
+       "title": "Example reset",
+       "description": "Example reset credit."
+      }
+     ]
+    },
+    "accountId": "acct-REDACTED",
+    "rateLimitUpsell": null
+   }
+  }
+ },
+ {
+  "dir": "send",
+  "msg": {
+   "id": 4,
+   "method": "account/read",
+   "params": {
+    "refreshToken": false
+   }
+  }
+ },
+ {
+  "dir": "recv",
+  "msg": {
+   "id": 4,
+   "result": {
+    "account": {
+     "type": "chatgpt",
+     "email": "user@example.invalid",
+     "planType": "plus",
+     "workspaceName": null
+    },
+    "requiresOpenaiAuth": true,
+    "workspaceRouting": {
+     "chatgptAccountId": "acct-REDACTED",
+     "backendOrigin": "https://chatgpt.invalid",
+     "accountRoutingOverride": "NO_CONSTRAINT"
+    }
+   }
+  }
+ }
+]

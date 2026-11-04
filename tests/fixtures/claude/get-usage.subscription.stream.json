@@ -1,0 +1,54 @@
+[
+ {
+  "type": "system",
+  "subtype": "ui_invalidate",
+  "event": "ui.render",
+  "uuid": "00000000-0000-0000-0000-000000000000",
+  "session_id": "00000000-0000-0000-0000-000000000000"
+ },
+ {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "quotaribbon-usage-1",
+   "response": {
+    "session": {
+     "total_cost_usd": 0,
+     "total_api_duration_ms": 0,
+     "total_duration_ms": 500,
+     "total_lines_added": 0,
+     "total_lines_removed": 0,
+     "model_usage": {}
+    },
+    "subscription_type": "pro",
+    "rate_limits_available": true,
+    "rate_limits": {
+     "five_hour": null,
+     "seven_day": {
+      "utilization": 40,
+      "resets_at": "2026-01-08T00:00:00.500000+00:00",
+      "limit_dollars": null,
+      "used_dollars": null,
+      "remaining_dollars": null,
+      "locked_reason": null
+     },
+     "seven_day_opus": null,
+     "seven_day_sonnet": null,
+     "extra_bucket_a": {
+      "utilization": 100,
+      "resets_at": "2026-01-09T00:00:00+00:00",
+      "limit_dollars": 100,
+      "used_dollars": 100,
+      "remaining_dollars": 0,
+      "locked_reason": null
+     },
+     "extra_bucket_b": null,
+     "seven_day_breakdown": {
+      "as_of": "2026-01-01T12:00:00.500000+00:00"
+     }
+    },
+    "behaviors": null
+   }
+  }
+ }
+]

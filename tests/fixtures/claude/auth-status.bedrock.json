@@ -1,0 +1,8 @@
+{
+ "loggedIn": true,
+ "authMethod": "third_party",
+ "apiProvider": "bedrock",
+ "analyticsDisabled": true,
+ "projectsDirectory": "/tmp/qr-fixture/claudeapi/projects",
+ "configDirectory": "/tmp/qr-fixture/claudeapi"
+}

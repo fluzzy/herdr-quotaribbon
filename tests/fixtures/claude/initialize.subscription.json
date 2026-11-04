@@ -1,0 +1,17 @@
+{
+ "type": "control_response",
+ "response": {
+  "subtype": "success",
+  "request_id": "quotaribbon-init-1",
+  "response": {
+   "account": {
+    "email": "user@example.invalid",
+    "organization": "Example Org",
+    "subscriptionType": "Example Plan",
+    "apiProvider": "firstParty"
+   },
+   "claude_code_version": "2.1.316",
+   "hooks_applied": null
+  }
+ }
+}
